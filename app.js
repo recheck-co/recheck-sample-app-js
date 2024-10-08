@@ -7,8 +7,9 @@ config.redirectUri = window.location.href.split('?')[0];  // Remove any query pa
 // Function to update OAuth endpoints based on Recheck host
 function updateOAuthEndpoints() {
   const recheckHost = document.getElementById('recheckHost').value.trim();
-  config.authorizationEndpoint = `https://${recheckHost}/oauth/authorize/`;
-  config.tokenEndpoint = `https://${recheckHost}/oauth/token/`;
+  const protocol = recheckHost === "localhost" ? "http" : "https";
+  config.authorizationEndpoint = `${protocol}://${recheckHost}/oauth/authorize/`;
+  config.tokenEndpoint = `${protocol}://${recheckHost}/oauth/token/`;
 }
 
 // Function to update scope
