@@ -6,10 +6,10 @@ config.redirectUri = window.location.href.split('?')[0];  // Remove any query pa
 
 // Function to update OAuth endpoints based on Recheck host
 function updateOAuthEndpoints() {
-  const recheckHost = document.getElementById('recheckHost').value.trim();
-  const protocol = recheckHost === "localhost" ? "http" : "https";
-  config.authorizationEndpoint = `${protocol}://${recheckHost}/oauth/authorize/`;
-  config.tokenEndpoint = `${protocol}://${recheckHost}/oauth/token/`;
+  const recheckEndpoint = document.getElementById('recheckEndpoint').value.trim();
+  config.authorizationEndpoint = `${recheckEndpoint}/oauth/authorize/`;
+  config.tokenEndpoint = `${recheckEndpoint}/oauth/token/`;
+  config.userinfoEndpoint = `${recheckEndpoint}/api/userinfo/`;
 }
 
 // Function to update scope
@@ -24,11 +24,11 @@ function saveToLocalStorage(key, value) {
 
 // Function to load form values from local storage
 function loadFromLocalStorage() {
-  const recheckHostInput = document.getElementById('recheckHost');
+  const recheckEndpointInput = document.getElementById('recheckEndpoint');
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
 
-  recheckHostInput.value = localStorage.getItem('recheckHost') || 'recheck.co';
+  recheckEndpointInput.value = localStorage.getItem('recheckEndpoint') || 'https://recheck.co';
   clientIdInput.value = localStorage.getItem('clientId') || '';
   scopeInput.value = localStorage.getItem('scope') || 'openid';
 
@@ -118,10 +118,7 @@ async function exchangeCodeForToken(code) {
   tokenRequest.append('client_id', clientId);
   tokenRequest.append('code_verifier', codeVerifier);
 
-  addLogEntry('Sending token request', {
-    endpoint: config.tokenEndpoint,
-    params: Object.fromEntries(tokenRequest)
-  });
+  addLogEntry(`Sending token request to ${config.tokenEndpoint}`, Object.fromEntries(tokenRequest));
 
   try {
     const response = await fetch(config.tokenEndpoint, {
@@ -182,12 +179,11 @@ async function handleCallback() {
     return;
   }
 
-  addLogEntry('State parameter validated');
+  addLogEntry('State parameter validated. Now we exchange the code for a token...');
 
   try {
-    addLogEntry('Exchanging code for ID token...');
     const tokenResponse = await exchangeCodeForToken(code);
-    addLogEntry('Received ID token response', tokenResponse);    
+    addLogEntry('Received token response', tokenResponse);    
 
     // Decode ID token
     const [headerB64, payloadB64, signature] = tokenResponse["id_token"].split('.');
@@ -199,8 +195,34 @@ async function handleCallback() {
         signature: signature
     });
 
+    await requestUserInfo(tokenResponse.access_token);
+
   } catch (error) {
     addLogEntry('Error during ID token exchange', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    }, true);
+  }
+}
+
+async function requestUserInfo(accessToken) {
+  try {
+    addLogEntry(`Fetching ${config.userinfoEndpoint}`);
+    const response = await fetch(config.userinfoEndpoint, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const userInfo = await response.json();
+    addLogEntry('Received userinfo', userInfo);
+  } catch (error) {
+    addLogEntry('Error fetching user info', {
       name: error.name,
       message: error.message,
       stack: error.stack
@@ -213,17 +235,16 @@ function displayError(message) {
   addLogEntry('Error', { message }, true);
 }
 
-
 // Set up event listeners
 function setupEventListeners() {
   const loginButton = document.getElementById('loginButton');
-  const recheckHostInput = document.getElementById('recheckHost');
+  const recheckEndpointInput = document.getElementById('recheckEndpoint');
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
 
   // Add event listeners to save changes to local storage
-  recheckHostInput.addEventListener('input', () => {
-    saveToLocalStorage('recheckHost', recheckHostInput.value);
+  recheckEndpointInput.addEventListener('input', () => {
+    saveToLocalStorage('recheckEndpoint', recheckEndpointInput.value);
     updateOAuthEndpoints();
   });
 
