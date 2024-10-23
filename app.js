@@ -9,7 +9,7 @@ function updateOAuthEndpoints() {
   const recheckEndpoint = document.getElementById('recheckEndpoint').value.trim();
   config.authorizationEndpoint = `${recheckEndpoint}/oauth/authorize/`;
   config.tokenEndpoint = `${recheckEndpoint}/oauth/token/`;
-  config.userinfoEndpoint = `${recheckEndpoint}/api/userinfo/`;
+  config.userinfoEndpoint = `${recheckEndpoint}/oauth/userinfo/`;
 }
 
 // Function to update scope
