@@ -38,6 +38,7 @@ function loadFromLocalStorage() {
 }
 
 // Generate a random string for state
+// https://auth0.com/docs/secure/attack-protection/state-parameters
 function generateRandomString(length) {
   const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let text = '';
@@ -47,7 +48,8 @@ function generateRandomString(length) {
   return text;
 }
 
-// Generate code verifier and challenge
+// Generate code verifier and challenge (PKCE)
+// https://datatracker.ietf.org/doc/html/rfc7636#section-4.1
 async function generateCodeVerifierAndChallenge() {
   const codeVerifier = generateRandomString(128);
   const encoder = new TextEncoder();
@@ -69,10 +71,17 @@ async function startOAuthFlow() {
   updateScope();
 
   const state = generateRandomString(16);
-  const { codeVerifier, codeChallenge } = await generateCodeVerifierAndChallenge();
-  
-  localStorage.setItem('code_verifier', codeVerifier);
   localStorage.setItem('state', state);
+  addLogEntry("Generated state value", {
+    state: state
+  });
+
+  const { codeVerifier, codeChallenge } = await generateCodeVerifierAndChallenge();
+  localStorage.setItem('code_verifier', codeVerifier);
+  addLogEntry("Generated PKCE values", {
+    code_verifier: codeVerifier,
+    code_challenge: codeChallenge
+  });
 
   const authUrl = new URL(config.authorizationEndpoint);
   authUrl.searchParams.append('response_type', 'code');
@@ -83,7 +92,15 @@ async function startOAuthFlow() {
   authUrl.searchParams.append('code_challenge', codeChallenge);
   authUrl.searchParams.append('code_challenge_method', 'S256');
 
-  window.location = authUrl.toString();
+  addLogEntry("Redirecting to authorization endpoint in 5 seconds...", {
+    params: Object.fromEntries(authUrl.searchParams.entries()),
+    url: authUrl.toString()
+  });
+  // A real implementation would not implement this delay. It is done here to provide a moment to read
+  // the values logged above.
+  setTimeout(() => {
+    window.location = authUrl.toString();
+  }, 5000);
 }
 
 function addLogEntry(message, data = null, isError = false) {
