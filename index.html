@@ -11,9 +11,9 @@
 </head>
 <body>
     <main class="container">
-        <h2>Recheck OAuth Test Client</h2>
+        <h2>Recheck OAuth Test Client (Email Blast Edition)</h2>
         <form>
-            <label for="recheckHost">
+            <label for="recheckEndpoint">
                 Recheck Endpoint:
                 <input type="text" id="recheckEndpoint" name="recheckEndpoint" required>
             </label>
@@ -24,6 +24,10 @@
             <label for="scope">
                 Scope:
                 <input type="text" id="scope" name="scope" required>
+            </label>
+            <label for="userEmail">
+                User Email (for email-based workflows)
+                <input type="text" id="userEmail" name="userEmail" required>
             </label>
             <img id="loginButton" src="/verify-with-recheck-light.png" style="height: 50px; cursor: pointer"/>
         </form>
