@@ -1,6 +1,6 @@
 // OAuth configuration
 const config = {};
-
+const SECRET_KEY = "123456"
 // Dynamically set the redirect URI based on the current URL
 config.redirectUri = window.location.href.split('?')[0];  // Remove any query parameters
 
@@ -17,6 +17,7 @@ function updateScope() {
   config.scope = document.getElementById('scope').value.trim();
 }
 
+
 // Function to save form values to local storage
 function saveToLocalStorage(key, value) {
   localStorage.setItem(key, value);
@@ -27,10 +28,12 @@ function loadFromLocalStorage() {
   const recheckEndpointInput = document.getElementById('recheckEndpoint');
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
+  const emailInput = document.getElementById('userEmail');
 
   recheckEndpointInput.value = localStorage.getItem('recheckEndpoint') || 'https://recheck.co';
   clientIdInput.value = localStorage.getItem('clientId') || '';
   scopeInput.value = localStorage.getItem('scope') || 'openid';
+  emailInput.value = localStorage.getItem('userEmail') || '';
 
   // Update config with loaded values
   updateOAuthEndpoints();
@@ -48,38 +51,76 @@ function generateRandomString(length) {
   return text;
 }
 
-// Generate code verifier and challenge (PKCE)
-// https://datatracker.ietf.org/doc/html/rfc7636#section-4.1
-async function generateCodeVerifierAndChallenge() {
-  const codeVerifier = generateRandomString(128);
+async function signEmail(email) {
+  const encoder = new TextEncoder();
+  const key = await window.crypto.subtle.importKey(
+    'raw',
+    encoder.encode('abc'),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await window.crypto.subtle.sign(
+    'HMAC',
+    key,
+    encoder.encode(email)
+  );
+  return Array.from(new Uint8Array(signature))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function createState(email) {
+  const signature = await signEmail(email);
+  return encodeURIComponent(`${email}:${signature}`);
+}
+
+async function verifyState(state) {
+  const [email, sig] = decodeURIComponent(state).split(':');
+  const calculatedSig = await signEmail(email);
+  return (sig === calculatedSig)
+}
+
+async function generateCodeVerifier(email) {
+  const codeVerifier = email + SECRET_KEY;
   const encoder = new TextEncoder();
   const data = encoder.encode(codeVerifier);
   const digest = await window.crypto.subtle.digest('SHA-256', data);
-  const base64Digest = btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
-  return { codeVerifier, codeChallenge: base64Digest };
+  return btoa(String.fromCharCode(...new Uint8Array(digest)));
+}
+
+
+// Generate code verifier and challenge (PKCE)
+// https://datatracker.ietf.org/doc/html/rfc7636#section-4.1
+async function generateCodeChallenge(email) {
+  const codeVerifier = await generateCodeVerifier(email);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(codeVerifier);
+  const digest = await window.crypto.subtle.digest('SHA-256', data);
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
 }
 
 // Initiate OAuth flow
 async function startOAuthFlow() {
-  const clientIdInput = document.getElementById('clientId');
-  const clientId = clientIdInput.value.trim();
+  const clientId = document.getElementById('clientId').value.trim();
+  const email = document.getElementById('userEmail').value.trim();
 
   updateOAuthEndpoints();
   updateScope();
 
-  const state = generateRandomString(16);
-  localStorage.setItem('state', state);
+  addLogEntry("Creating state based on user email");
+  const state = await createState(email);
+  localStorage.removeItem('state');
   addLogEntry("Generated state value", {
     state: state
   });
 
-  const { codeVerifier, codeChallenge } = await generateCodeVerifierAndChallenge();
-  localStorage.setItem('code_verifier', codeVerifier);
-  addLogEntry("Generated PKCE values", {
-    code_verifier: codeVerifier,
+  const codeChallenge = await generateCodeChallenge(email)
+
+  addLogEntry("Generated codeChallenge from email", {
     code_challenge: codeChallenge
   });
 
@@ -124,10 +165,9 @@ function addLogEntry(message, data = null, isError = false) {
   }
 
 // Exchange code for token
-async function exchangeCodeForToken(code) {
+async function exchangeCodeForToken(code, codeVerifier) {
   updateOAuthEndpoints();
   const clientId = localStorage.getItem('clientId');
-  const codeVerifier = localStorage.getItem('code_verifier');
   const tokenRequest = new URLSearchParams();
   tokenRequest.append('grant_type', 'authorization_code');
   tokenRequest.append('code', code);
@@ -188,18 +228,19 @@ async function handleCallback() {
     return;
   }
 
-  if (state !== storedState) {
-    addLogEntry('Invalid state parameter', { 
-      received: state, 
-      expected: storedState 
+  let email = decodeURIComponent(state).split(':')[0];
+  if (await verifyState(state)) {
+    addLogEntry('Verified state parameter for email ' + email, false);
+  } else {
+    addLogEntry(`Invalid state parameter for email ` + email, {
+      received: state,
+      expected: await createState(email)
     }, true);
     return;
   }
 
-  addLogEntry('State parameter validated. Now we exchange the code for a token...');
-
   try {
-    const tokenResponse = await exchangeCodeForToken(code);
+    const tokenResponse = await exchangeCodeForToken(code, await generateCodeVerifier(email));
     addLogEntry('Received token response', tokenResponse);    
 
     // Decode ID token
@@ -258,6 +299,7 @@ function setupEventListeners() {
   const recheckEndpointInput = document.getElementById('recheckEndpoint');
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
+  const emailInput = document.getElementById('userEmail');
 
   // Add event listeners to save changes to local storage
   recheckEndpointInput.addEventListener('input', () => {
@@ -272,6 +314,11 @@ function setupEventListeners() {
   scopeInput.addEventListener('input', () => {
     saveToLocalStorage('scope', scopeInput.value);
     updateScope();
+  });
+
+  emailInput.addEventListener('input', () => {
+    saveToLocalStorage('userEmail', emailInput.value);
+    updateEmail();
   });
 
   loginButton.addEventListener('click', startOAuthFlow);
