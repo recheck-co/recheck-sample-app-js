@@ -27,10 +27,12 @@ function loadFromLocalStorage() {
   const recheckEndpointInput = document.getElementById('recheckEndpoint');
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
+  const delayRedirectInput = document.getElementById('delayRedirect');
 
   recheckEndpointInput.value = localStorage.getItem('recheckEndpoint') || 'https://recheck.co';
   clientIdInput.value = localStorage.getItem('clientId') || '';
   scopeInput.value = localStorage.getItem('scope') || 'openid';
+  delayRedirectInput.checked = localStorage.getItem('delayRedirect') === 'true';
 
   // Update config with loaded values
   updateOAuthEndpoints();
@@ -92,15 +94,27 @@ async function startOAuthFlow() {
   authUrl.searchParams.append('code_challenge', codeChallenge);
   authUrl.searchParams.append('code_challenge_method', 'S256');
 
-  addLogEntry("Redirecting to authorization endpoint in 5 seconds...", {
+  const fullUrl = authUrl.toString();
+
+  addLogEntry("Redirecting to authorization endpoint...", {
     params: Object.fromEntries(authUrl.searchParams.entries()),
-    url: authUrl.toString()
+    url: fullUrl
   });
-  // A real implementation would not implement this delay. It is done here to provide a moment to read
-  // the values logged above.
-  setTimeout(() => {
-    window.location = authUrl.toString();
-  }, 5000);
+  
+  // Check if delay is enabled
+  const delayRedirect = document.getElementById('delayRedirect').checked;
+  
+  if (delayRedirect) {
+    // A real implementation would not implement this delay. It is done here to provide a moment to read
+    // the values logged above.
+    addLogEntry("Delaying redirect to allow reading logs...");
+    setTimeout(() => {
+      window.location = fullUrl;
+    }, 10000);
+  } else {
+    // Redirect immediately
+    window.location = fullUrl;
+  }
 }
 
 function addLogEntry(message, data = null, isError = false) {
@@ -258,6 +272,7 @@ function setupEventListeners() {
   const recheckEndpointInput = document.getElementById('recheckEndpoint');
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
+  const delayRedirectInput = document.getElementById('delayRedirect');
 
   // Add event listeners to save changes to local storage
   recheckEndpointInput.addEventListener('input', () => {
@@ -272,6 +287,10 @@ function setupEventListeners() {
   scopeInput.addEventListener('input', () => {
     saveToLocalStorage('scope', scopeInput.value);
     updateScope();
+  });
+  
+  delayRedirectInput.addEventListener('change', () => {
+    saveToLocalStorage('delayRedirect', delayRedirectInput.checked);
   });
 
   loginButton.addEventListener('click', startOAuthFlow);
