@@ -25,6 +25,14 @@
                 Scope:
                 <input type="text" id="scope" name="scope" required>
             </label>
+            <label for="loginHint">
+                Login Hint (optional):
+                <input type="text" id="loginHint" name="loginHint" placeholder="email@example.com">
+            </label>
+            <label for="recheckToken">
+                Recheck Token (optional - triggers selfie re-verification flow):
+                <input type="text" id="recheckToken" name="recheckToken" placeholder="123456789:example.com:2024-01-01:signature">
+            </label>
             <div style="margin-bottom: 1rem;">
                 <label for="delayRedirect" style="display: flex; align-items: center; gap: 0.5rem;">
                     <input type="checkbox" id="delayRedirect" name="delayRedirect">

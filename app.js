@@ -17,6 +17,16 @@ function updateScope() {
   config.scope = document.getElementById('scope').value.trim();
 }
 
+// Function to update login hint
+function updateLoginHint() {
+  config.loginHint = document.getElementById('loginHint').value.trim();
+}
+
+// Function to update recheck token
+function updateRecheckToken() {
+  config.recheckToken = document.getElementById('recheckToken').value.trim();
+}
+
 // Function to save form values to local storage
 function saveToLocalStorage(key, value) {
   localStorage.setItem(key, value);
@@ -28,15 +38,22 @@ function loadFromLocalStorage() {
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
   const delayRedirectInput = document.getElementById('delayRedirect');
+  const loginHintInput = document.getElementById('loginHint');
 
-  recheckEndpointInput.value = localStorage.getItem('recheckEndpoint') || 'https://recheck.co';
-  clientIdInput.value = localStorage.getItem('clientId') || '';
+  const recheckTokenInput = document.getElementById('recheckToken');
+
+  recheckEndpointInput.value = localStorage.getItem('recheckEndpoint') || 'http://localhost:8000';
+  clientIdInput.value = localStorage.getItem('clientId') || 'lsGH3LjbcdCmCf2hAngVYL0Hvhz0U22DtVMW18oD';
   scopeInput.value = localStorage.getItem('scope') || 'openid';
   delayRedirectInput.checked = localStorage.getItem('delayRedirect') === 'true';
+  loginHintInput.value = localStorage.getItem('loginHint') || '';
+  recheckTokenInput.value = localStorage.getItem('recheckToken') || '';
 
   // Update config with loaded values
   updateOAuthEndpoints();
   updateScope();
+  updateLoginHint();
+  updateRecheckToken();
 }
 
 // Generate a random string for state
@@ -71,9 +88,12 @@ async function startOAuthFlow() {
 
   updateOAuthEndpoints();
   updateScope();
+  updateLoginHint();
+  updateRecheckToken();
 
   const state = generateRandomString(16);
   localStorage.setItem('state', state);
+  localStorage.setItem('flow_type', config.recheckToken ? 'reverification' : 'standard');
   addLogEntry("Generated state value", {
     state: state
   });
@@ -93,6 +113,16 @@ async function startOAuthFlow() {
   authUrl.searchParams.append('state', state);
   authUrl.searchParams.append('code_challenge', codeChallenge);
   authUrl.searchParams.append('code_challenge_method', 'S256');
+  
+  // Add login_hint if provided
+  if (config.loginHint) {
+    authUrl.searchParams.append('login_hint', config.loginHint);
+  }
+
+  // Add recheck_token if provided (triggers selfie re-verification flow)
+  if (config.recheckToken) {
+    authUrl.searchParams.append('recheck_token', config.recheckToken);
+  }
 
   const fullUrl = authUrl.toString();
 
@@ -118,22 +148,25 @@ async function startOAuthFlow() {
 }
 
 function addLogEntry(message, data = null, isError = false) {
+    const logFn = isError ? console.error : console.log;
+    logFn(`[recheck-app] ${message}`, data ?? '');
+
     const responseElement = document.getElementById('response');
     const logEntry = document.createElement('div');
     logEntry.style.marginBottom = '1rem';
-    
+
     let content = `<strong>${new Date().toLocaleTimeString()}</strong> — ${message}`;
-    
+
     if (data) {
       content += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
     }
-    
+
     logEntry.innerHTML = content;
-    
+
     if (isError) {
       logEntry.style.color = 'red';
     }
-    
+
     responseElement.appendChild(logEntry);
   }
 
@@ -192,13 +225,19 @@ async function handleCallback() {
   const code = urlParams.get('code');
   const state = urlParams.get('state');
   const error = urlParams.get('error');
+  const errorDescription = urlParams.get('error_description');
   const storedState = localStorage.getItem('state');
+  const flowType = localStorage.getItem('flow_type') || 'standard';
+  const isReverificationFlow = flowType === 'reverification';
+  if (isReverificationFlow) {
+    addLogEntry('Processing reverification callback');
+  }
 
   // Clear the URL parameters
   window.history.replaceState({}, document.title, window.location.pathname);
 
   if (error) {
-    addLogEntry('Authorization error', { error }, true);
+    addLogEntry('Authorization error', { error, error_description: errorDescription }, true);
     return;
   }
 
@@ -214,7 +253,7 @@ async function handleCallback() {
 
   try {
     const tokenResponse = await exchangeCodeForToken(code);
-    addLogEntry('Received token response', tokenResponse);    
+    addLogEntry('Received token response', tokenResponse);
 
     // Decode ID token
     const [headerB64, payloadB64, signature] = tokenResponse["id_token"].split('.');
@@ -226,8 +265,30 @@ async function handleCallback() {
         signature: signature
     });
 
-    await requestUserInfo(tokenResponse.access_token);
+    if (isReverificationFlow) {
+      // Extract the updated recheck token from the sub claim
+      const newRecheckToken = payload.sub;
+      addLogEntry('Updated recheck token from id_token sub claim', {
+        recheck_token: newRecheckToken
+      });
 
+      // Update the form field and persist for next use
+      document.getElementById('recheckToken').value = newRecheckToken;
+      saveToLocalStorage('recheckToken', newRecheckToken);
+      updateRecheckToken();
+    }
+
+    // Verify the authorization by fetching userinfo
+    if (!tokenResponse.access_token) {
+      addLogEntry('No access_token returned in token response — skipping userinfo verification', {
+        token_response_keys: Object.keys(tokenResponse)
+      }, true);
+    } else {
+      addLogEntry(isReverificationFlow
+        ? 'Verifying reverification authorization by fetching userinfo...'
+        : 'Fetching userinfo...');
+      await requestUserInfo(tokenResponse.access_token);
+    }
   } catch (error) {
     addLogEntry('Error during ID token exchange', {
       name: error.name,
@@ -235,6 +296,46 @@ async function handleCallback() {
       stack: error.stack
     }, true);
   }
+}
+
+// Handle reverification callback
+async function handleReverificationCallback() {
+  const urlParams = new URLSearchParams(window.location.search);
+  addLogEntry('Received reverification callback with parameters', Object.fromEntries(urlParams));
+
+  const status = urlParams.get('status');
+  const recheckToken = urlParams.get('recheck_token');
+  const state = urlParams.get('state');
+  const storedState = localStorage.getItem('state');
+
+  // Clear the URL parameters
+  window.history.replaceState({}, document.title, window.location.pathname);
+
+  if (state !== storedState) {
+    addLogEntry('Invalid state parameter', {
+      received: state,
+      expected: storedState
+    }, true);
+    return;
+  }
+
+  addLogEntry('State parameter validated');
+
+  if (status !== 'pass') {
+    addLogEntry('Reverification failed', { status, recheck_token: recheckToken }, true);
+    return;
+  }
+
+  addLogEntry('Reverification passed — received new recheck token', {
+    status: status,
+    recheck_token: recheckToken
+  });
+
+  // Update the form field and persist for next use
+  document.getElementById('recheckToken').value = recheckToken;
+  saveToLocalStorage('recheckToken', recheckToken);
+  updateRecheckToken();
+
 }
 
 async function requestUserInfo(accessToken) {
@@ -273,6 +374,8 @@ function setupEventListeners() {
   const clientIdInput = document.getElementById('clientId');
   const scopeInput = document.getElementById('scope');
   const delayRedirectInput = document.getElementById('delayRedirect');
+  const loginHintInput = document.getElementById('loginHint');
+  const recheckTokenInput = document.getElementById('recheckToken');
 
   // Add event listeners to save changes to local storage
   recheckEndpointInput.addEventListener('input', () => {
@@ -293,6 +396,16 @@ function setupEventListeners() {
     saveToLocalStorage('delayRedirect', delayRedirectInput.checked);
   });
 
+  loginHintInput.addEventListener('input', () => {
+    saveToLocalStorage('loginHint', loginHintInput.value);
+    updateLoginHint();
+  });
+
+  recheckTokenInput.addEventListener('input', () => {
+    saveToLocalStorage('recheckToken', recheckTokenInput.value);
+    updateRecheckToken();
+  });
+
   loginButton.addEventListener('click', startOAuthFlow);
 }
 
@@ -307,11 +420,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initial update of OAuth endpoints and display
   updateOAuthEndpoints();
   updateScope();
+  updateLoginHint();
+  updateRecheckToken();
 
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('code') || urlParams.has('error')) {
-    // We're in the callback phase
+    // Standard OAuth callback phase
     handleCallback().catch(error => displayError(error.message));
+  } else if (urlParams.has('recheck_token') || urlParams.has('status')) {
+    // Reverification callback phase
+    handleReverificationCallback().catch(error => displayError(error.message));
   } else {
     // Clear previous logs when starting a new flow
     document.getElementById('response').innerHTML = '';
