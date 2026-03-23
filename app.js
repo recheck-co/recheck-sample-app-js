@@ -6,10 +6,17 @@ config.redirectUri = window.location.href.split('?')[0];  // Remove any query pa
 
 // Function to update OAuth endpoints based on Recheck host
 function updateOAuthEndpoints() {
-  const recheckEndpoint = document.getElementById('recheckEndpoint').value.trim();
+  const recheckEndpoint = document.getElementById('recheckEndpoint').value.trim().replace(/\/+$/, '');
   config.authorizationEndpoint = `${recheckEndpoint}/oauth/authorize/`;
   config.tokenEndpoint = `${recheckEndpoint}/oauth/token/`;
   config.userinfoEndpoint = `${recheckEndpoint}/oauth/userinfo/`;
+  config.reverifyEndpoint = `${recheckEndpoint}/oauth/reverify/`;
+  config.reverifyRedirectEndpoint = `${recheckEndpoint}/reverify/`;
+}
+
+// Function to update recheck token
+function updateRecheckToken() {
+  config.recheckToken = document.getElementById('recheckToken').value.trim();
 }
 
 // Function to update scope
@@ -34,17 +41,20 @@ function loadFromLocalStorage() {
   const scopeInput = document.getElementById('scope');
   const delayRedirectInput = document.getElementById('delayRedirect');
   const loginHintInput = document.getElementById('loginHint');
+  const recheckTokenInput = document.getElementById('recheckToken');
 
   recheckEndpointInput.value = localStorage.getItem('recheckEndpoint') || 'https://recheck.co';
   clientIdInput.value = localStorage.getItem('clientId') || '';
   scopeInput.value = localStorage.getItem('scope') || 'openid';
   delayRedirectInput.checked = localStorage.getItem('delayRedirect') === 'true';
   loginHintInput.value = localStorage.getItem('loginHint') || '';
+  recheckTokenInput.value = localStorage.getItem('recheckToken') || '';
 
   // Update config with loaded values
   updateOAuthEndpoints();
   updateScope();
   updateLoginHint();
+  updateRecheckToken();
 }
 
 // Generate a random string for state
@@ -201,6 +211,126 @@ async function exchangeCodeForToken(code) {
   }
 }
 
+// Selfie Reverification flow
+async function startReverification() {
+  const clientId = document.getElementById('clientId').value.trim();
+  const recheckToken = document.getElementById('recheckToken').value.trim();
+
+  if (!clientId) {
+    addLogEntry('Client ID is required for reverification', null, true);
+    return;
+  }
+  if (!recheckToken) {
+    addLogEntry('Recheck Token is required for reverification', null, true);
+    return;
+  }
+
+  updateOAuthEndpoints();
+
+  addLogEntry('Creating reverification session...', {
+    endpoint: config.reverifyEndpoint,
+    client_id: clientId,
+    recheck_token: recheckToken
+  });
+
+  try {
+    const response = await fetch(config.reverifyEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: clientId,
+        recheck_token: recheckToken
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      addLogEntry('Failed to create reverification session', {
+        status: response.status,
+        response: data
+      }, true);
+      return;
+    }
+
+    const sessionId = data.session_id;
+    addLogEntry('Reverification session created', { session_id: sessionId });
+
+    // Store session_id so we can fetch the result after redirect
+    localStorage.setItem('reverify_session_id', sessionId);
+
+    // Build the redirect URL
+    const reverifyUrl = new URL(config.reverifyRedirectEndpoint);
+    reverifyUrl.searchParams.append('session', sessionId);
+    reverifyUrl.searchParams.append('redirect_uri', config.redirectUri);
+
+    addLogEntry('Redirecting to selfie reverification...', {
+      url: reverifyUrl.toString()
+    });
+
+    const delayRedirect = document.getElementById('delayRedirect').checked;
+    if (delayRedirect) {
+      addLogEntry('Delaying redirect to allow reading logs...');
+      setTimeout(() => { window.location = reverifyUrl.toString(); }, 10000);
+    } else {
+      window.location = reverifyUrl.toString();
+    }
+  } catch (error) {
+    addLogEntry('Error creating reverification session', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    }, true);
+  }
+}
+
+// Fetch reverification result
+async function fetchReverificationResult(sessionId) {
+  const clientId = localStorage.getItem('clientId');
+  updateOAuthEndpoints();
+
+  const resultUrl = `${config.reverifyEndpoint}${sessionId}/?client_id=${encodeURIComponent(clientId)}`;
+
+  addLogEntry('Fetching reverification result...', {
+    url: resultUrl
+  });
+
+  try {
+    const response = await fetch(resultUrl);
+    const data = await response.json();
+
+    if (!response.ok) {
+      addLogEntry('Failed to fetch reverification result', {
+        status: response.status,
+        response: data
+      }, true);
+      return;
+    }
+
+    const passed = data.result === true;
+    addLogEntry(passed ? 'Reverification PASSED' : 'Reverification FAILED', data, !passed);
+  } catch (error) {
+    addLogEntry('Error fetching reverification result', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    }, true);
+  }
+}
+
+// Handle reverification callback
+async function handleReverificationCallback(sessionId) {
+  addLogEntry('Received reverification callback', { session_id: sessionId });
+
+  // Clear URL parameters
+  window.history.replaceState({}, document.title, window.location.pathname);
+
+  // Clear stored session
+  localStorage.removeItem('reverify_session_id');
+
+  await fetchReverificationResult(sessionId);
+}
+
 // Handle OAuth callback
 async function handleCallback() {
   const urlParams = new URLSearchParams(window.location.search);
@@ -323,7 +453,16 @@ function setupEventListeners() {
     updateLoginHint();
   });
 
+  const recheckTokenInput = document.getElementById('recheckToken');
+  recheckTokenInput.addEventListener('input', () => {
+    saveToLocalStorage('recheckToken', recheckTokenInput.value);
+    updateRecheckToken();
+  });
+
   loginButton.addEventListener('click', startOAuthFlow);
+
+  const reverifyButton = document.getElementById('reverifyButton');
+  reverifyButton.addEventListener('click', startReverification);
 }
 
 // Main app logic
@@ -338,9 +477,13 @@ document.addEventListener('DOMContentLoaded', () => {
   updateOAuthEndpoints();
   updateScope();
   updateLoginHint();
+  updateRecheckToken();
 
   const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.has('code') || urlParams.has('error')) {
+  if (urlParams.has('session')) {
+    // Reverification callback phase
+    handleReverificationCallback(urlParams.get('session')).catch(error => displayError(error.message));
+  } else if (urlParams.has('code') || urlParams.has('error')) {
     // OAuth callback phase
     handleCallback().catch(error => displayError(error.message));
   } else {
