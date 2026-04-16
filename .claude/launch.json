@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "recheck-sample-app-js",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["run.sh"],
+      "port": 3001,
+      "autoPort": true
+    }
+  ]
+}
